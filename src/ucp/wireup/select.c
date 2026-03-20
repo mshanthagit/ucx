@@ -2504,6 +2504,14 @@ ucp_wireup_add_device_lanes(const ucp_wireup_select_params_t *select_params,
     found_lane = ucp_wireup_add_bw_lanes(select_params, &bw_info,
                                          mem_type_tl_bitmap, UCP_NULL_LANE,
                                          select_ctx, 0);
+
+    /* Add device lanes for ROCm memory */
+    ucp_wireup_memaccess_bitmap(context, UCS_MEMORY_TYPE_ROCM,
+                                &mem_type_tl_bitmap);
+    found_lane |= ucp_wireup_add_bw_lanes(select_params, &bw_info,
+                                          mem_type_tl_bitmap, UCP_NULL_LANE,
+                                          select_ctx, 0);
+
     if (!found_lane) {
         ucs_debug("ep %p: could not find device lanes", select_params->ep);
     }

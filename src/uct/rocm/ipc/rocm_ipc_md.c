@@ -12,6 +12,7 @@
 
 #include <uct/rocm/base/rocm_base.h>
 #include <uct/api/v2/uct_v2.h>
+#include <uct/api/device/uct_device_types.h>
 
 
 static ucs_config_field_t uct_rocm_ipc_md_config_table[] = {
@@ -26,7 +27,9 @@ static ucs_status_t uct_rocm_ipc_md_query(uct_md_h md, uct_md_attr_v2_t *md_attr
 {
     uct_md_base_md_query(md_attr);
     md_attr->rkey_packed_size = sizeof(uct_rocm_ipc_key_t);
-    md_attr->flags            = UCT_MD_FLAG_REG | UCT_MD_FLAG_NEED_RKEY;
+    md_attr->flags            = UCT_MD_FLAG_REG | UCT_MD_FLAG_NEED_RKEY |
+                                UCT_MD_FLAG_MEMTYPE_COPY |
+                                UCT_MD_FLAG_RKEY_PTR;
     md_attr->reg_mem_types    = UCS_BIT(UCS_MEMORY_TYPE_ROCM);
     md_attr->cache_mem_types  = UCS_BIT(UCS_MEMORY_TYPE_ROCM);
     md_attr->access_mem_types = UCS_BIT(UCS_MEMORY_TYPE_ROCM);
@@ -118,6 +121,30 @@ uct_rocm_ipc_mem_dereg(uct_md_h md,
 }
 
 static ucs_status_t
+uct_rocm_ipc_md_mem_elem_pack(uct_md_h md, uct_mem_h memh, uct_rkey_t rkey,
+                              uct_device_mem_element_t *mem_elem_p)
+{
+    uct_rocm_ipc_key_t *key = (uct_rocm_ipc_key_t *)rkey;
+    uct_rocm_ipc_device_mem_element_t *rocm_ipc_mem_element =
+            (uct_rocm_ipc_device_mem_element_t *)mem_elem_p;
+    hsa_status_t status;
+    void *mapped_addr;
+    /* Attach IPC memory handle to get mapped address */
+    status = hsa_amd_ipc_memory_attach(&key->ipc, key->length, 0, NULL, &mapped_addr);
+
+    if (status != HSA_STATUS_SUCCESS) {
+        ucs_error("failed to attach ipc memory handle");
+        return UCS_ERR_IO_ERROR;
+    }
+
+    /* Calculate offset: base_address - mapped_address */
+    rocm_ipc_mem_element->mapped_offset =
+            UCS_PTR_BYTE_DIFF(key->address, mapped_addr);
+
+    return UCS_OK;
+}
+
+static ucs_status_t
 uct_rocm_ipc_md_open(uct_component_h component, const char *md_name,
                      const uct_md_config_t *uct_md_config, uct_md_h *md_p)
 {
@@ -131,9 +158,9 @@ uct_rocm_ipc_md_open(uct_component_h component, const char *md_name,
         .mem_dereg          = uct_rocm_ipc_mem_dereg,
         .mem_query          = (uct_md_mem_query_func_t)ucs_empty_function_return_unsupported,
         .mkey_pack          = uct_rocm_ipc_mkey_pack,
+        .mem_elem_pack      = uct_rocm_ipc_md_mem_elem_pack,
         .mem_attach         = (uct_md_mem_attach_func_t)ucs_empty_function_return_unsupported,
-        .detect_memory_type = (uct_md_detect_memory_type_func_t)ucs_empty_function_return_unsupported,
-        .mem_elem_pack      = (uct_md_mem_elem_pack_func_t)ucs_empty_function_return_unsupported
+        .detect_memory_type = (uct_md_detect_memory_type_func_t)ucs_empty_function_return_unsupported
     };
     static uct_md_t md = {
         .ops       = &md_ops,
@@ -173,12 +200,34 @@ static ucs_status_t uct_rocm_ipc_rkey_release(uct_component_t *component,
     return UCS_OK;
 }
 
+ucs_status_t uct_rocm_ipc_rkey_ptr(uct_component_t *component, uct_rkey_t rkey,
+                                   void *handle, uint64_t raddr, void **laddr_p)
+{
+    uct_rocm_ipc_key_t *key = (uct_rocm_ipc_key_t *)rkey;
+    hsa_status_t status;
+    void *mapped_addr;
+    ptrdiff_t offset;
+
+    /* Attach IPC memory handle */
+    status = hsa_amd_ipc_memory_attach(&key->ipc, key->length, 0, NULL, &mapped_addr);
+    if (status != HSA_STATUS_SUCCESS) {
+        ucs_error("failed to attach ipc memory handle");
+        return UCS_ERR_IO_ERROR;
+    }
+
+    /* Calculate offset from base address */
+    offset = UCS_PTR_BYTE_DIFF(key->address, raddr);
+    *laddr_p = UCS_PTR_BYTE_OFFSET(mapped_addr, offset);
+
+    return UCS_OK;
+}
+
 uct_component_t uct_rocm_ipc_component = {
     .query_md_resources = uct_rocm_base_query_md_resources,
     .md_open            = uct_rocm_ipc_md_open,
     .cm_open            = (uct_component_cm_open_func_t)ucs_empty_function_return_unsupported,
     .rkey_unpack        = uct_rocm_ipc_rkey_unpack,
-    .rkey_ptr           = (uct_component_rkey_ptr_func_t)ucs_empty_function_return_unsupported,
+    .rkey_ptr           = uct_rocm_ipc_rkey_ptr,
     .rkey_release       = uct_rocm_ipc_rkey_release,
     .rkey_compare       = uct_base_rkey_compare,
     .name               = "rocm_ipc",
@@ -194,4 +243,3 @@ uct_component_t uct_rocm_ipc_component = {
     .md_vfs_init        = (uct_component_md_vfs_init_func_t)ucs_empty_function
 };
 UCT_COMPONENT_REGISTER(&uct_rocm_ipc_component);
-

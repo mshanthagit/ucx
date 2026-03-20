@@ -13,11 +13,11 @@
 /*
  * Declare GPU specific functions
  */
-#ifdef __NVCC__
+#if defined(__NVCC__) || defined(__HIPCC__)
 #define UCS_F_DEVICE __device__ __forceinline__ static
 #else
 #define UCS_F_DEVICE static inline
-#endif /* __NVCC__ */
+#endif /* __NVCC__ || __HIPCC__ */
 
 
 #ifndef UCP_DEVICE_ENABLE_PARAMS_CHECK

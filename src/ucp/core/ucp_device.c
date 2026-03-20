@@ -434,7 +434,12 @@ ucs_status_t
 ucp_device_local_mem_list_create(const ucp_device_mem_list_params_t *params,
                                  ucp_device_local_mem_list_h *mem_list_h)
 {
+#if HAVE_CUDA
     const ucs_memory_type_t export_mem_type = UCS_MEMORY_TYPE_CUDA;
+#endif
+#if HAVE_ROCM
+    const ucs_memory_type_t export_mem_type = UCS_MEMORY_TYPE_ROCM;
+#endif
     ucs_status_t status;
     uct_allocated_memory_t mem;
     ucs_sys_device_t local_sys_dev;
@@ -682,7 +687,12 @@ ucs_status_t
 ucp_device_remote_mem_list_create(const ucp_device_mem_list_params_t *params,
                                   ucp_device_remote_mem_list_h *mem_list_h)
 {
+#if CUDA
     const ucs_memory_type_t export_mem_type = UCS_MEMORY_TYPE_CUDA;
+#endif
+#if HAVE_ROCM
+    const ucs_memory_type_t export_mem_type = UCS_MEMORY_TYPE_ROCM;
+#endif
     ucs_status_t status;
     uct_allocated_memory_t mem;
 
@@ -704,7 +714,6 @@ ucp_device_remote_mem_list_create(const ucp_device_mem_list_params_t *params,
         }
         return status;
     }
-
     /* Track memory allocator for later release */
     status = ucp_device_mem_handle_hash_insert(&mem, params->num_elements);
     if (status != UCS_OK) {
