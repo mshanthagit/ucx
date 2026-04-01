@@ -8,9 +8,18 @@
 
 #include <uct/base/uct_md.h>
 #include <hsa_ext_amd.h>
+#include <pthread.h>
 
 
-extern uct_component_t uct_rocm_ipc_component;
+typedef struct uct_rocm_ipc_cache uct_rocm_ipc_cache_t;
+
+typedef struct uct_rocm_ipc_component {
+    uct_component_t       super;
+    uct_rocm_ipc_cache_t *ipc_cache;
+    pthread_mutex_t       lock;
+} uct_rocm_ipc_component_t;
+
+extern uct_rocm_ipc_component_t uct_rocm_ipc_component;
 
 typedef struct uct_rocm_ipc_md {
     struct uct_md super;

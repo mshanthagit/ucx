@@ -9,6 +9,7 @@
 #endif
 
 #include "rocm_ipc_md.h"
+#include "rocm_ipc_cache.h"
 
 #include <uct/rocm/base/rocm_base.h>
 #include <uct/api/v2/uct_v2.h>
@@ -22,6 +23,29 @@ static ucs_config_field_t uct_rocm_ipc_md_config_table[] = {
 
     {NULL}
 };
+
+static ucs_status_t uct_rocm_ipc_component_init_cache()
+{
+    ucs_status_t status;
+
+    pthread_mutex_lock(&uct_rocm_ipc_component.lock);
+
+    if (uct_rocm_ipc_component.ipc_cache == NULL) {
+        status = uct_rocm_ipc_create_cache(&uct_rocm_ipc_component.ipc_cache,
+                                           "rocm_ipc_component");
+        if (status != UCS_OK) {
+            ucs_error("Failed to create ROCm IPC component cache: %s",
+                      ucs_status_string(status));
+            pthread_mutex_unlock(&uct_rocm_ipc_component.lock);
+            return status;
+        }
+
+        ucs_debug("ROCm IPC component cache initialized");
+    }
+
+    pthread_mutex_unlock(&uct_rocm_ipc_component.lock);
+    return UCS_OK;
+}
 
 static ucs_status_t uct_rocm_ipc_md_query(uct_md_h md, uct_md_attr_v2_t *md_attr)
 {
@@ -120,26 +144,39 @@ uct_rocm_ipc_mem_dereg(uct_md_h md,
 }
 
 static ucs_status_t
-uct_rocm_ipc_md_mem_elem_pack(uct_md_h md, uct_mem_h memh, uct_rkey_t rkey,
+uct_rocm_ipc_md_mem_elem_pack(uct_md_h md_h, uct_mem_h memh, uct_rkey_t rkey,
                               uct_device_mem_element_t *mem_elem_p)
 {
+    uct_md_t *md = (uct_md_t*)md_h;
+    uct_rocm_ipc_component_t *rocm_comp =
+        ucs_derived_of(md->component, uct_rocm_ipc_component_t);
     uct_rocm_ipc_key_t *key = (uct_rocm_ipc_key_t*)rkey;
     uct_rocm_ipc_device_mem_element_t *rocm_ipc_mem_element =
             (uct_rocm_ipc_device_mem_element_t*)mem_elem_p;
-    hsa_status_t status;
     void *mapped_addr;
-    /* Attach IPC memory handle to get mapped address */
-    status = hsa_amd_ipc_memory_attach(&key->ipc, key->length, 0, NULL,
-                                       &mapped_addr);
+    ucs_status_t status;
 
-    if (status != HSA_STATUS_SUCCESS) {
-        ucs_error("failed to attach ipc memory handle");
-        return UCS_ERR_IO_ERROR;
+    /* Ensure cache is initialized */
+    status = uct_rocm_ipc_component_init_cache();
+    if (status != UCS_OK) {
+        return status;
+    }
+
+    /* Use cache instead of direct attach */
+    status = uct_rocm_ipc_cache_map_memhandle(rocm_comp->ipc_cache, key,
+                                              &mapped_addr);
+    if (status != UCS_OK) {
+        ucs_error("Failed to map IPC handle: %s", ucs_status_string(status));
+        return status;
     }
 
     /* Calculate offset: base_address - mapped_address */
     rocm_ipc_mem_element->mapped_offset = UCS_PTR_BYTE_DIFF(key->address,
                                                             mapped_addr);
+
+    ucs_trace("rocm_ipc mem_elem_pack: key_addr=%p mapped=%p offset=%ld",
+              (void*)key->address, mapped_addr,
+              rocm_ipc_mem_element->mapped_offset);
 
     return UCS_OK;
 }
@@ -170,7 +207,7 @@ uct_rocm_ipc_md_open(uct_component_h component, const char *md_name,
     };
     static uct_md_t md = {
         .ops       = &md_ops,
-        .component = &uct_rocm_ipc_component,
+        .component = &uct_rocm_ipc_component.super,
     };
 
     *md_p = &md;
@@ -209,46 +246,70 @@ static ucs_status_t uct_rocm_ipc_rkey_release(uct_component_t *component,
 ucs_status_t uct_rocm_ipc_rkey_ptr(uct_component_t *component, uct_rkey_t rkey,
                                    void *handle, uint64_t raddr, void **laddr_p)
 {
+    uct_rocm_ipc_component_t *rocm_comp =
+        ucs_derived_of(component, uct_rocm_ipc_component_t);
     uct_rocm_ipc_key_t *key = (uct_rocm_ipc_key_t*)rkey;
-    hsa_status_t status;
     void *mapped_addr;
     ptrdiff_t offset;
+    ucs_status_t status;
 
-    /* Attach IPC memory handle */
-    status = hsa_amd_ipc_memory_attach(&key->ipc, key->length, 0, NULL,
-                                       &mapped_addr);
-    if (status != HSA_STATUS_SUCCESS) {
-        ucs_error("failed to attach ipc memory handle");
-        return UCS_ERR_IO_ERROR;
+    /* Ensure cache is initialized */
+    status = uct_rocm_ipc_component_init_cache();
+    if (status != UCS_OK) {
+        return status;
+    }
+
+    /* Use cache instead of direct attach */
+    status = uct_rocm_ipc_cache_map_memhandle(rocm_comp->ipc_cache, key,
+                                              &mapped_addr);
+    if (status != UCS_OK) {
+        ucs_error("Failed to map IPC handle: %s", ucs_status_string(status));
+        return status;
     }
 
     /* Calculate offset from base address */
     offset   = UCS_PTR_BYTE_DIFF(key->address, raddr);
     *laddr_p = UCS_PTR_BYTE_OFFSET(mapped_addr, offset);
 
+    ucs_trace("rocm_ipc rkey_ptr: raddr=%p mapped=%p offset=%ld laddr=%p",
+              (void*)raddr, mapped_addr, offset, *laddr_p);
+
     return UCS_OK;
 }
 
-uct_component_t uct_rocm_ipc_component = {
-    .query_md_resources = uct_rocm_base_query_md_resources,
-    .md_open            = uct_rocm_ipc_md_open,
-    .cm_open            = (uct_component_cm_open_func_t)
-            ucs_empty_function_return_unsupported,
-    .rkey_unpack        = uct_rocm_ipc_rkey_unpack,
-    .rkey_ptr           = uct_rocm_ipc_rkey_ptr,
-    .rkey_release       = uct_rocm_ipc_rkey_release,
-    .rkey_compare       = uct_base_rkey_compare,
-    .name               = "rocm_ipc",
-    .md_config =
-            {
-                    .name   = "ROCm-IPC memory domain",
-                    .prefix = "ROCM_IPC_MD_",
-                    .table  = uct_rocm_ipc_md_config_table,
-                    .size   = sizeof(uct_rocm_ipc_md_config_t),
-            },
-    .cm_config   = UCS_CONFIG_EMPTY_GLOBAL_LIST_ENTRY,
-    .tl_list     = UCT_COMPONENT_TL_LIST_INITIALIZER(&uct_rocm_ipc_component),
-    .flags       = 0,
-    .md_vfs_init = (uct_component_md_vfs_init_func_t)ucs_empty_function
+uct_rocm_ipc_component_t uct_rocm_ipc_component = {
+    .super = {
+        .query_md_resources = uct_rocm_base_query_md_resources,
+        .md_open            = uct_rocm_ipc_md_open,
+        .cm_open            = (uct_component_cm_open_func_t)
+                ucs_empty_function_return_unsupported,
+        .rkey_unpack        = uct_rocm_ipc_rkey_unpack,
+        .rkey_ptr           = uct_rocm_ipc_rkey_ptr,
+        .rkey_release       = uct_rocm_ipc_rkey_release,
+        .rkey_compare       = uct_base_rkey_compare,
+        .name               = "rocm_ipc",
+        .md_config =
+                {
+                        .name   = "ROCm-IPC memory domain",
+                        .prefix = "ROCM_IPC_MD_",
+                        .table  = uct_rocm_ipc_md_config_table,
+                        .size   = sizeof(uct_rocm_ipc_md_config_t),
+                },
+        .cm_config   = UCS_CONFIG_EMPTY_GLOBAL_LIST_ENTRY,
+        .tl_list     = UCT_COMPONENT_TL_LIST_INITIALIZER(&uct_rocm_ipc_component.super),
+        .flags       = 0,
+        .md_vfs_init = (uct_component_md_vfs_init_func_t)ucs_empty_function
+    },
+    .ipc_cache = NULL,
+    .lock      = PTHREAD_MUTEX_INITIALIZER
 };
-UCT_COMPONENT_REGISTER(&uct_rocm_ipc_component);
+UCT_COMPONENT_REGISTER(&uct_rocm_ipc_component.super);
+
+UCS_STATIC_CLEANUP {
+    if (uct_rocm_ipc_component.ipc_cache != NULL) {
+        ucs_debug("Destroying ROCm IPC component cache");
+        uct_rocm_ipc_destroy_cache(uct_rocm_ipc_component.ipc_cache);
+        uct_rocm_ipc_component.ipc_cache = NULL;
+    }
+    pthread_mutex_destroy(&uct_rocm_ipc_component.lock);
+}
