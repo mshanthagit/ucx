@@ -28,7 +28,8 @@ static ucs_config_field_t uct_rocm_ipc_iface_config_table[] = {
      ucs_offsetof(uct_rocm_ipc_iface_config_t, params.latency),
      UCS_CONFIG_TYPE_TIME},
 
-    {"CACHE_IPC_HANDLES", "y", "Enable caching IPC handles",
+    {"CACHE_IPC_HANDLES", "y",
+     "Enable caching IPC handles (DEPRECATED: caching is always enabled at component level)",
      ucs_offsetof(uct_rocm_ipc_iface_config_t, params.enable_ipc_handle_cache),
      UCS_CONFIG_TYPE_BOOL},
 

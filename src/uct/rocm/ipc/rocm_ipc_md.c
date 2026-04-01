@@ -24,7 +24,7 @@ static ucs_config_field_t uct_rocm_ipc_md_config_table[] = {
     {NULL}
 };
 
-static ucs_status_t uct_rocm_ipc_component_init_cache()
+ucs_status_t uct_rocm_ipc_component_init_cache()
 {
     ucs_status_t status;
 

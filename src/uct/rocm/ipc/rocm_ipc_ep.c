@@ -20,29 +20,17 @@
 static UCS_CLASS_INIT_FUNC(uct_rocm_ipc_ep_t, const uct_ep_params_t *params)
 {
     uct_rocm_ipc_iface_t *iface = ucs_derived_of(params->iface, uct_rocm_ipc_iface_t);
-    char target_name[64];
-    ucs_status_t status;
 
     UCS_CLASS_CALL_SUPER_INIT(uct_base_ep_t, &iface->super);
 
     self->remote_pid = *(const pid_t*)params->iface_addr;
     self->device_ep  = NULL;
 
-    snprintf(target_name, sizeof(target_name), "dest:%d", *(pid_t*)params->iface_addr);
-    status = uct_rocm_ipc_create_cache(&self->remote_memh_cache, target_name);
-    if (status != UCS_OK) {
-        ucs_error("could not create create rocm ipc cache: %s",
-                  ucs_status_string(status));
-        return status;
-    }
-
     return UCS_OK;
 }
 
 static UCS_CLASS_CLEANUP_FUNC(uct_rocm_ipc_ep_t)
 {
-    uct_rocm_ipc_destroy_cache(self->remote_memh_cache);
-
     if (self->device_ep != NULL) {
         hsa_amd_memory_pool_free(self->device_ep);
     }
@@ -63,7 +51,6 @@ ucs_status_t uct_rocm_ipc_ep_zcopy(uct_ep_h tl_ep,
                                    uct_completion_t *comp,
                                    int is_put)
 {
-    uct_rocm_ipc_ep_t *ep = ucs_derived_of(tl_ep, uct_rocm_ipc_ep_t);
     hsa_status_t status;
     hsa_agent_t local_agent, remote_agent;
     hsa_agent_t dst_agent, src_agent;
@@ -99,22 +86,19 @@ ucs_status_t uct_rocm_ipc_ep_zcopy(uct_ep_h tl_ep,
         return UCS_ERR_INVALID_ADDR;
     }
 
-    if (iface->config.enable_ipc_handle_cache) {
-        ret = uct_rocm_ipc_cache_map_memhandle((void*)ep->remote_memh_cache,
-                                               key, &remote_base_addr);
-        if (ucs_unlikely(ret != UCS_OK)) {
-            ucs_error("fail to attach ipc mem %p %d\n", (void*)key->address,
-                      ret);
-            return ret;
-        }
-    } else {
-        status = hsa_amd_ipc_memory_attach(&key->ipc, key->length, 0, NULL,
-                                           &remote_base_addr);
-        if (ucs_unlikely(status != HSA_STATUS_SUCCESS)) {
-            ucs_error("failed to open ipc mem handle. addr:%p len:%lu",
-                      (void*)key->address, key->length);
-            return UCS_ERR_INVALID_ADDR;
-        }
+    /* Ensure component cache is initialized */
+    ret = uct_rocm_ipc_component_init_cache();
+    if (ret != UCS_OK) {
+       ucs_error("failed to initialize rocm_ipc component cache\n");
+       return ret;
+    }
+
+    /* Use component-level cache for all IPC handle mappings */
+    ret = uct_rocm_ipc_cache_map_memhandle(
+        (void*)uct_rocm_ipc_component.ipc_cache, key, &remote_base_addr);
+    if (ucs_unlikely(ret != UCS_OK)) {
+        ucs_error("fail to attach ipc mem %p %d\n", (void*)key->address, ret);
+        return ret;
     }
 
     remote_copy_addr = UCS_PTR_BYTE_OFFSET(remote_base_addr,
@@ -178,11 +162,8 @@ ucs_status_t uct_rocm_ipc_ep_zcopy(uct_ep_h tl_ep,
     }
 
     rocm_ipc_signal->comp = comp;
-    if (iface->config.enable_ipc_handle_cache) {
-        rocm_ipc_signal->mapped_addr = NULL;
-    } else {
-        rocm_ipc_signal->mapped_addr = remote_base_addr;
-    }
+    /* Component cache manages lifetime - no need to track mapped_addr */
+    rocm_ipc_signal->mapped_addr = NULL;
     ucs_queue_push(&iface->signal_queue, &rocm_ipc_signal->queue);
 
     ucs_trace("rocm async copy issued :%p remote:%p, local:%p  len:%ld",

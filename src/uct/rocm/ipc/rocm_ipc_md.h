@@ -1,5 +1,5 @@
 /*
- * Copyright (C) Advanced Micro Devices, Inc. 2019. ALL RIGHTS RESERVED.
+ * Copyright (C) Advanced Micro Devices, Inc. 2019-2026. ALL RIGHTS RESERVED.
  * See file LICENSE for terms.
  */
 
@@ -20,6 +20,8 @@ typedef struct uct_rocm_ipc_component {
 } uct_rocm_ipc_component_t;
 
 extern uct_rocm_ipc_component_t uct_rocm_ipc_component;
+
+ucs_status_t uct_rocm_ipc_component_init_cache(void);
 
 typedef struct uct_rocm_ipc_md {
     struct uct_md super;

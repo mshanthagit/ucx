@@ -16,8 +16,7 @@
 typedef struct uct_rocm_ipc_ep {
     uct_base_ep_t   super;
     pid_t           remote_pid;
-    uct_rocm_ipc_cache_t *remote_memh_cache;
-    uct_device_ep_h      device_ep;
+    uct_device_ep_h device_ep;
 } uct_rocm_ipc_ep_t;
 
 UCS_CLASS_DECLARE_NEW_FUNC(uct_rocm_ipc_ep_t, uct_ep_t, const uct_ep_params_t *);
