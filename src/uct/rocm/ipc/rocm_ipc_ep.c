@@ -86,19 +86,28 @@ ucs_status_t uct_rocm_ipc_ep_zcopy(uct_ep_h tl_ep,
         return UCS_ERR_INVALID_ADDR;
     }
 
-    /* Ensure component cache is initialized */
-    ret = uct_rocm_ipc_component_init_cache();
-    if (ret != UCS_OK) {
-       ucs_error("failed to initialize rocm_ipc component cache\n");
-       return ret;
-    }
-
-    /* Use component-level cache for all IPC handle mappings */
-    ret = uct_rocm_ipc_cache_map_memhandle(
-        (void*)uct_rocm_ipc_component.ipc_cache, key, &remote_base_addr);
-    if (ucs_unlikely(ret != UCS_OK)) {
-        ucs_error("fail to attach ipc mem %p %d\n", (void*)key->address, ret);
-        return ret;
+    if (iface->config.enable_ipc_handle_cache) {
+        /* Ensure component cache is initialized */
+        ret = uct_rocm_ipc_component_init_cache();
+        if (ucs_unlikely(ret != UCS_OK)) {
+            ucs_error("failed to initialize rocm_ipc component cache\n");
+            return ret;
+        }
+        ret = uct_rocm_ipc_cache_map_memhandle((void*)uct_rocm_ipc_component.ipc_cache,
+                                               key, &remote_base_addr);
+        if (ucs_unlikely(ret != UCS_OK)) {
+            ucs_error("fail to attach ipc mem %p %d\n", (void*)key->address,
+                      ret);
+            return ret;
+        }
+    } else {
+        status = hsa_amd_ipc_memory_attach(&key->ipc, key->length, 0, NULL,
+                                           &remote_base_addr);
+        if (ucs_unlikely(status != HSA_STATUS_SUCCESS)) {
+            ucs_error("failed to open ipc mem handle. addr:%p len:%lu",
+                      (void*)key->address, key->length);
+            return UCS_ERR_INVALID_ADDR;
+        }
     }
 
     remote_copy_addr = UCS_PTR_BYTE_OFFSET(remote_base_addr,
@@ -162,8 +171,11 @@ ucs_status_t uct_rocm_ipc_ep_zcopy(uct_ep_h tl_ep,
     }
 
     rocm_ipc_signal->comp = comp;
-    /* Component cache manages lifetime - no need to track mapped_addr */
-    rocm_ipc_signal->mapped_addr = NULL;
+    if (iface->config.enable_ipc_handle_cache) {
+        rocm_ipc_signal->mapped_addr = NULL;
+    } else {
+        rocm_ipc_signal->mapped_addr = remote_base_addr;
+    }
     ucs_queue_push(&iface->signal_queue, &rocm_ipc_signal->queue);
 
     ucs_trace("rocm async copy issued :%p remote:%p, local:%p  len:%ld",

@@ -29,7 +29,7 @@ static ucs_config_field_t uct_rocm_ipc_iface_config_table[] = {
      UCS_CONFIG_TYPE_TIME},
 
     {"CACHE_IPC_HANDLES", "y",
-     "Enable caching IPC handles (DEPRECATED: caching is always enabled at component level)",
+     "Enable caching IPC handles (Note: caching is always enabled for device initiated communication)",
      ucs_offsetof(uct_rocm_ipc_iface_config_t, params.enable_ipc_handle_cache),
      UCS_CONFIG_TYPE_BOOL},
 
