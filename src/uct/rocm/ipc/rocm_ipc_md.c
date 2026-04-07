@@ -24,29 +24,6 @@ static ucs_config_field_t uct_rocm_ipc_md_config_table[] = {
     {NULL}
 };
 
-ucs_status_t uct_rocm_ipc_component_init_cache()
-{
-    ucs_status_t status;
-
-    pthread_mutex_lock(&uct_rocm_ipc_component.lock);
-
-    if (uct_rocm_ipc_component.ipc_cache == NULL) {
-        status = uct_rocm_ipc_create_cache(&uct_rocm_ipc_component.ipc_cache,
-                                           "rocm_ipc_component");
-        if (status != UCS_OK) {
-            ucs_error("Failed to create ROCm IPC component cache: %s",
-                      ucs_status_string(status));
-            pthread_mutex_unlock(&uct_rocm_ipc_component.lock);
-            return status;
-        }
-
-        ucs_debug("ROCm IPC component cache initialized");
-    }
-
-    pthread_mutex_unlock(&uct_rocm_ipc_component.lock);
-    return UCS_OK;
-}
-
 static ucs_status_t uct_rocm_ipc_md_query(uct_md_h md, uct_md_attr_v2_t *md_attr)
 {
     uct_md_base_md_query(md_attr);

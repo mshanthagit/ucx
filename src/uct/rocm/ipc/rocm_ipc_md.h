@@ -21,8 +21,6 @@ typedef struct uct_rocm_ipc_component {
 
 extern uct_rocm_ipc_component_t uct_rocm_ipc_component;
 
-ucs_status_t uct_rocm_ipc_component_init_cache(void);
-
 typedef struct uct_rocm_ipc_md {
     struct uct_md super;
 } uct_rocm_ipc_md_t;

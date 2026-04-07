@@ -10,7 +10,6 @@
 
 #include "rocm_ipc_ep.h"
 #include "rocm_ipc_iface.h"
-#include "rocm_ipc_md.h"
 
 #include <uct/rocm/base/rocm_base.h>
 #include <uct/rocm/base/rocm_signal.h>
