@@ -16,6 +16,12 @@
 #include <ucs/profile/profile.h>
 #include <ucs/sys/ptr_arith.h>
 #include <ucs/sys/sys.h>
+#include <ucs/sys/string.h>
+
+/*
+ * Global cache manager - manages all per-peer caches
+ */
+static uct_rocm_ipc_cache_manager_t uct_rocm_ipc_remote_cache_manager;
 
 static ucs_pgt_dir_t *uct_rocm_ipc_cache_pgt_dir_alloc(const ucs_pgtable_t *pgtable)
 {
@@ -45,6 +51,55 @@ uct_rocm_ipc_cache_region_collect_callback(const ucs_pgtable_t *pgtable,
     region = ucs_derived_of(pgt_region, uct_rocm_ipc_cache_region_t);
     ucs_list_add_tail(list, &region->list);
 }
+
+uct_rocm_ipc_cache_manager_t* uct_rocm_ipc_get_cache_manager(void)
+{
+    return &uct_rocm_ipc_remote_cache_manager;
+}
+
+
+ucs_status_t uct_rocm_ipc_get_peer_cache(uct_rocm_ipc_cache_manager_t *manager,
+                                         const uct_rocm_ipc_peer_key_t *peer_key,
+                                         uct_rocm_ipc_cache_t **cache_p)
+{
+    ucs_status_t status = UCS_OK;
+    char cache_name[64];
+    khiter_t khiter;
+    int khret;
+
+    ucs_recursive_spin_lock(&manager->lock);
+
+    khiter = kh_put(rocm_ipc_peer_cache, &manager->hash, *peer_key, &khret);
+    if ((khret == UCS_KH_PUT_BUCKET_EMPTY) ||
+        (khret == UCS_KH_PUT_BUCKET_CLEAR)) {
+        /* Create new cache for this peer */
+        ucs_snprintf_safe(cache_name, sizeof(cache_name),
+                          "rocm_ipc_peer_%d:%ld", peer_key->pid,
+                          peer_key->pid_ns);
+        status = uct_rocm_ipc_create_cache(cache_p, cache_name);
+        if (status != UCS_OK) {
+            kh_del(rocm_ipc_peer_cache, &manager->hash, khiter);
+            ucs_error("could not create rocm ipc cache for peer %d:%ld: %s",
+                      peer_key->pid, peer_key->pid_ns,
+                      ucs_status_string(status));
+            goto err_unlock;
+        }
+
+        kh_val(&manager->hash, khiter) = *cache_p;
+        ucs_debug("created cache for peer %d:%ld", peer_key->pid,
+                  peer_key->pid_ns);
+    } else if (khret == UCS_KH_PUT_KEY_PRESENT) {
+        *cache_p = kh_val(&manager->hash, khiter);
+    } else {
+        ucs_error("unable to use rocm_ipc peer_cache hash");
+        status = UCS_ERR_NO_RESOURCE;
+    }
+
+err_unlock:
+    ucs_recursive_spin_unlock(&manager->lock);
+    return status;
+}
+
 
 static void uct_rocm_ipc_cache_purge(uct_rocm_ipc_cache_t *cache)
 {
@@ -97,12 +152,20 @@ static void uct_rocm_ipc_cache_invalidate_regions(uct_rocm_ipc_cache_t *cache,
 ucs_status_t uct_rocm_ipc_cache_map_memhandle(void *arg, uct_rocm_ipc_key_t *key,
                                               void **mapped_addr)
 {
-    uct_rocm_ipc_cache_t *cache = (uct_rocm_ipc_cache_t *)arg;
+    uct_rocm_ipc_cache_manager_t *manager = (uct_rocm_ipc_cache_manager_t *)arg;
+    const uct_rocm_ipc_peer_key_t peer_key = {key->pid, key->pid_ns};
+    uct_rocm_ipc_cache_t *cache;
     ucs_status_t status;
     ucs_pgt_region_t *pgt_region;
     uct_rocm_ipc_cache_region_t *region;
     hsa_status_t hsa_status;
     int ret;
+
+    /* Get or create cache for this specific peer */
+    status = uct_rocm_ipc_get_peer_cache(manager, &peer_key, &cache);
+    if (status != UCS_OK) {
+        return status;
+    }
 
     pthread_rwlock_rdlock(&cache->lock);
     pgt_region = UCS_PROFILE_CALL(ucs_pgtable_lookup,
@@ -233,29 +296,6 @@ err:
     return status;
 }
 
-ucs_status_t uct_rocm_ipc_component_init_cache(void)
-{
-    ucs_status_t status;
-
-    pthread_mutex_lock(&uct_rocm_ipc_component.lock);
-
-    if (uct_rocm_ipc_component.ipc_cache == NULL) {
-        status = uct_rocm_ipc_create_cache(&uct_rocm_ipc_component.ipc_cache,
-                                           "rocm_ipc_component");
-        if (status != UCS_OK) {
-            ucs_error("Failed to create ROCm IPC component cache: %s",
-                      ucs_status_string(status));
-            pthread_mutex_unlock(&uct_rocm_ipc_component.lock);
-            return status;
-        }
-
-        ucs_debug("ROCm IPC component cache initialized");
-    }
-
-    pthread_mutex_unlock(&uct_rocm_ipc_component.lock);
-    return UCS_OK;
-}
-
 void uct_rocm_ipc_destroy_cache(uct_rocm_ipc_cache_t *cache)
 {
     uct_rocm_ipc_cache_purge(cache);
@@ -263,4 +303,25 @@ void uct_rocm_ipc_destroy_cache(uct_rocm_ipc_cache_t *cache)
     pthread_rwlock_destroy(&cache->lock);
     ucs_free(cache->name);
     ucs_free(cache);
+}
+
+UCS_STATIC_INIT
+{
+    ucs_recursive_spinlock_init(&uct_rocm_ipc_remote_cache_manager.lock, 0);
+    kh_init_inplace(rocm_ipc_peer_cache,
+                    &uct_rocm_ipc_remote_cache_manager.hash);
+    uct_rocm_ipc_remote_cache_manager.max_regions = ULONG_MAX;
+    uct_rocm_ipc_remote_cache_manager.max_size    = SIZE_MAX;
+}
+
+UCS_STATIC_CLEANUP
+{
+    uct_rocm_ipc_cache_t *peer_cache;
+
+    kh_foreach_value(&uct_rocm_ipc_remote_cache_manager.hash, peer_cache, {
+        uct_rocm_ipc_destroy_cache(peer_cache);
+    })
+    kh_destroy_inplace(rocm_ipc_peer_cache,
+                       &uct_rocm_ipc_remote_cache_manager.hash);
+    ucs_recursive_spinlock_destroy(&uct_rocm_ipc_remote_cache_manager.lock);
 }
