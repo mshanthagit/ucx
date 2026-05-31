@@ -18,6 +18,7 @@ typedef struct uct_rocm_ipc_iface_config_params {
     double   latency;
     int      enable_ipc_handle_cache;
     unsigned sigpool_max_elems;
+    unsigned flush_sigpool_max_elems;
 } uct_rocm_ipc_iface_config_params_t;
 
 typedef struct uct_rocm_ipc_iface {
@@ -25,6 +26,8 @@ typedef struct uct_rocm_ipc_iface {
     ucs_mpool_t                        signal_pool;
     ucs_queue_head_t                   signal_queue;
     uct_rocm_ipc_iface_config_params_t config;
+    ucs_mpool_t                        flush_signal_pool;
+    ucs_queue_head_t                   pending_queue;
 } uct_rocm_ipc_iface_t;
 
 typedef struct uct_rocm_ipc_iface_config {

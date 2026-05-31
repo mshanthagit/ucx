@@ -43,6 +43,11 @@ static ucs_config_field_t uct_rocm_copy_iface_config_table[] = {
      ucs_offsetof(uct_rocm_copy_iface_config_t, sigpool_max_elems),
      UCS_CONFIG_TYPE_UINT},
 
+    {"FLUSH_SIGPOOL_MAX_ELEMS", "32",
+     "Maximum number of elements in flush signal pool",
+     ucs_offsetof(uct_rocm_copy_iface_config_t, flush_sigpool_max_elems),
+     UCS_CONFIG_TYPE_UINT},
+
     {NULL}
 };
 
@@ -147,7 +152,8 @@ uct_rocm_copy_iface_flush(uct_iface_h tl_iface, unsigned flags,
         return UCS_ERR_UNSUPPORTED;
     }
 
-    if (ucs_queue_is_empty(&iface->signal_queue)) {
+    if (ucs_queue_is_empty(&iface->signal_queue) &&
+        ucs_queue_is_empty(&iface->pending_queue)) {
         UCT_TL_IFACE_STAT_FLUSH(ucs_derived_of(tl_iface, uct_base_iface_t));
         return UCS_OK;
     }
@@ -161,16 +167,48 @@ uct_rocm_copy_ep_flush(uct_ep_h tl_ep, unsigned flags, uct_completion_t *comp)
 {
     uct_rocm_copy_iface_t *iface = ucs_derived_of(tl_ep->iface,
                                                   uct_rocm_copy_iface_t);
-    return uct_rocm_base_ep_flush(tl_ep, &iface->signal_pool,
+    return uct_rocm_base_ep_flush(tl_ep, &iface->flush_signal_pool,
                                   &iface->signal_queue, comp);
+}
+
+static ucs_status_t
+uct_rocm_copy_ep_pending_add(uct_ep_h tl_ep, uct_pending_req_t *req,
+                             unsigned flags)
+{
+    uct_rocm_copy_iface_t *iface    = ucs_derived_of(tl_ep->iface,
+                                                     uct_rocm_copy_iface_t);
+    uct_rocm_pending_req_priv_t *priv = (uct_rocm_pending_req_priv_t *)req->priv;
+
+    UCS_STATIC_ASSERT(sizeof(*priv) <= UCT_PENDING_REQ_PRIV_LEN);
+    priv->ep = tl_ep;
+    ucs_queue_push(&iface->pending_queue, &priv->queue_elem);
+    return UCS_OK;
+}
+
+static void
+uct_rocm_copy_ep_pending_purge(uct_ep_h tl_ep, uct_pending_purge_callback_t cb,
+                               void *arg)
+{
+    uct_rocm_copy_iface_t *iface      = ucs_derived_of(tl_ep->iface,
+                                                       uct_rocm_copy_iface_t);
+    uct_rocm_pending_req_priv_t *priv;
+
+    uct_pending_queue_purge(priv, &iface->pending_queue, priv->ep == tl_ep,
+                            cb, arg);
 }
 
 static unsigned uct_rocm_copy_iface_progress(uct_iface_h tl_iface)
 {
     uct_rocm_copy_iface_t *iface = ucs_derived_of(tl_iface,
                                                   uct_rocm_copy_iface_t);
+    uct_rocm_pending_req_priv_t *priv;
+    unsigned count;
 
-    return uct_rocm_base_progress (&iface->signal_queue);
+    count = uct_rocm_base_progress(&iface->signal_queue);
+    if (count > 0) {
+        uct_pending_queue_dispatch(priv, &iface->pending_queue, 1);
+    }
+    return count;
 }
 
 
@@ -179,8 +217,8 @@ static uct_iface_ops_t uct_rocm_copy_iface_ops = {
     .ep_put_short             = uct_rocm_copy_ep_put_short,
     .ep_get_zcopy             = uct_rocm_copy_ep_get_zcopy,
     .ep_put_zcopy             = uct_rocm_copy_ep_put_zcopy,
-    .ep_pending_add           = (uct_ep_pending_add_func_t)ucs_empty_function_return_busy,
-    .ep_pending_purge         = (uct_ep_pending_purge_func_t)ucs_empty_function,
+    .ep_pending_add           = uct_rocm_copy_ep_pending_add,
+    .ep_pending_purge         = uct_rocm_copy_ep_pending_purge,
     .ep_flush                 = uct_rocm_copy_ep_flush,
     .ep_fence                 = uct_base_ep_fence,
     .ep_create                = UCS_CLASS_NEW_FUNC_NAME(uct_rocm_copy_ep_t),
@@ -350,6 +388,21 @@ static UCS_CLASS_INIT_FUNC(uct_rocm_copy_iface_t, uct_md_h md, uct_worker_h work
 
     ucs_queue_head_init(&self->signal_queue);
 
+    ucs_mpool_params_reset(&mp_params);
+    mp_params.elem_size       = sizeof(uct_rocm_base_signal_desc_t);
+    mp_params.elems_per_chunk = config->flush_sigpool_max_elems;
+    mp_params.max_elems       = config->flush_sigpool_max_elems;
+    mp_params.ops             = &uct_rocm_base_signal_desc_mpool_ops;
+    mp_params.name            = "ROCM_COPY flush signal objects";
+    status                    = ucs_mpool_init(&mp_params, &self->flush_signal_pool);
+    if (status != UCS_OK) {
+        ucs_error("rocm/copy flush signal mpool creation failed");
+        ucs_mpool_cleanup(&self->signal_pool, 1);
+        return status;
+    }
+
+    ucs_queue_head_init(&self->pending_queue);
+
     ucs_snprintf_safe(target_name, sizeof(target_name), "dest:%ld", self->id);
     status = uct_rocm_copy_create_cache(&self->local_memh_cache, target_name);
     if (status != UCS_OK) {
@@ -364,6 +417,7 @@ static UCS_CLASS_CLEANUP_FUNC(uct_rocm_copy_iface_t)
 {
     uct_base_iface_progress_disable(&self->super.super,
                                     UCT_PROGRESS_SEND | UCT_PROGRESS_RECV);
+    ucs_mpool_cleanup(&self->flush_signal_pool, 1);
     ucs_mpool_cleanup(&self->signal_pool, 1);
     uct_rocm_copy_destroy_cache(self->local_memh_cache);
 }

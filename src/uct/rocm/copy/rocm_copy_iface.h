@@ -27,6 +27,8 @@ typedef struct uct_rocm_copy_iface {
         int                     enable_async_zcopy;
         double                  latency;
     } config;
+    ucs_mpool_t                 flush_signal_pool;
+    ucs_queue_head_t            pending_queue;
 } uct_rocm_copy_iface_t;
 
 typedef struct uct_rocm_copy_iface_config {
@@ -36,6 +38,7 @@ typedef struct uct_rocm_copy_iface_config {
     int                 enable_async_zcopy;
     double              latency;
     unsigned            sigpool_max_elems;
+    unsigned            flush_sigpool_max_elems;
 } uct_rocm_copy_iface_config_t;
 
 #endif

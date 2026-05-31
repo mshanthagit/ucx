@@ -141,6 +141,11 @@ ucs_status_t uct_rocm_ipc_ep_zcopy(uct_ep_h tl_ep,
             return UCS_ERR_INVALID_ADDR;
         }
     }
+
+    rocm_ipc_signal = ucs_mpool_get(&iface->signal_pool);
+    if (rocm_ipc_signal == NULL) {
+        return UCS_ERR_NO_RESOURCE;
+    }
     if (is_put) {
         dst_addr  = remote_copy_addr;
         dst_agent = remote_agent;
@@ -151,13 +156,6 @@ ucs_status_t uct_rocm_ipc_ep_zcopy(uct_ep_h tl_ep,
         dst_agent = local_agent;
         src_addr  = remote_copy_addr;
         src_agent = remote_agent;
-    }
-
-    rocm_ipc_signal = ucs_mpool_get(&iface->signal_pool);
-    if (rocm_ipc_signal == NULL) {
-        ucs_error("increase the maximum number of signal pool elements with "
-                  "UCX_ROCM_IPC_SIGPOOL_MAX_ELEMS");
-        return UCS_ERR_IO_ERROR;
     }
 
     hsa_signal_store_screlease(rocm_ipc_signal->signal, 1);
