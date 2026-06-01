@@ -28,6 +28,7 @@ typedef struct uct_rocm_ipc_iface {
     uct_rocm_ipc_iface_config_params_t config;
     ucs_mpool_t                        flush_signal_pool;
     ucs_queue_head_t                   pending_queue;
+    ucs_queue_head_t                   deferred_flush_queue;
 } uct_rocm_ipc_iface_t;
 
 typedef struct uct_rocm_ipc_iface_config {

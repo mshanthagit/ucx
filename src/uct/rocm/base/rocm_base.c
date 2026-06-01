@@ -549,11 +549,24 @@ uct_rocm_amd_gpu_product_t uct_rocm_base_get_gpu_product(void)
 
 ucs_status_t uct_rocm_base_ep_flush(uct_ep_h tl_ep, ucs_mpool_t *signal_pool,
                                     ucs_queue_head_t *signal_queue,
+                                    ucs_queue_head_t *pending_queue,
+                                    ucs_queue_head_t *deferred_flush_queue,
                                     uct_completion_t *comp)
 {
     uct_rocm_base_signal_desc_t *flush_signal;
+    ucs_queue_elem_t *elem;
 
-    if (ucs_queue_is_empty(signal_queue)) {
+    /* drain any deferred flush markers now that pending ops may have cleared */
+    if (ucs_queue_is_empty(pending_queue)) {
+        while (!ucs_queue_is_empty(deferred_flush_queue)) {
+            elem = ucs_queue_pull(deferred_flush_queue);
+            ucs_queue_push(signal_queue, elem);
+        }
+    }
+
+    if (ucs_queue_is_empty(signal_queue) &&
+        ucs_queue_is_empty(pending_queue) &&
+        ucs_queue_is_empty(deferred_flush_queue)) {
         UCT_TL_EP_STAT_FLUSH(ucs_derived_of(tl_ep, uct_base_ep_t));
         return UCS_OK;
     }
@@ -571,7 +584,13 @@ ucs_status_t uct_rocm_base_ep_flush(uct_ep_h tl_ep, ucs_mpool_t *signal_pool,
     hsa_signal_store_screlease(flush_signal->signal, 0);
     flush_signal->comp        = comp;
     flush_signal->mapped_addr = NULL;
-    ucs_queue_push(signal_queue, &flush_signal->queue);
+
+    if (!ucs_queue_is_empty(pending_queue)) {
+        /* defer: insert into signal_queue only after pending ops drain */
+        ucs_queue_push(deferred_flush_queue, &flush_signal->queue);
+    } else {
+        ucs_queue_push(signal_queue, &flush_signal->queue);
+    }
 
     UCT_TL_EP_STAT_FLUSH_WAIT(ucs_derived_of(tl_ep, uct_base_ep_t));
     return UCS_INPROGRESS;

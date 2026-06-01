@@ -55,6 +55,8 @@ typedef struct {
 
 ucs_status_t uct_rocm_base_ep_flush(uct_ep_h tl_ep, ucs_mpool_t *flush_pool,
                                     ucs_queue_head_t *signal_queue,
+                                    ucs_queue_head_t *pending_queue,
+                                    ucs_queue_head_t *deferred_flush_queue,
                                     uct_completion_t *comp);
 
 #endif

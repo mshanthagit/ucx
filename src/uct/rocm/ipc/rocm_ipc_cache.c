@@ -119,10 +119,10 @@ ucs_status_t uct_rocm_ipc_cache_map_memhandle(void *arg, uct_rocm_ipc_key_t *key
             pthread_rwlock_unlock(&cache->lock);
             return UCS_OK;
         } else {
-            ucs_trace("%s: rocm_ipc cache remove stale region:"
-                      UCS_PGT_REGION_FMT " new_addr:%p new_size:%lu",
-                      cache->name, UCS_PGT_REGION_ARG(&region->super),
-                      (void *)key->address, key->length);
+            ucs_warn("%s: rocm_ipc cache stale region:"
+                     UCS_PGT_REGION_FMT " new_addr:%p new_size:%lu",
+                     cache->name, UCS_PGT_REGION_ARG(&region->super),
+                     (void *)key->address, key->length);
 
             status = ucs_pgtable_remove(&cache->pgtable, &region->super);
             if (status != UCS_OK) {
@@ -137,12 +137,17 @@ ucs_status_t uct_rocm_ipc_cache_map_memhandle(void *arg, uct_rocm_ipc_key_t *key
 
             ucs_free(region);
         }
+    } else {
+        ucs_warn("%s: rocm_ipc cache miss addr:%p size:%lu",
+                 cache->name, (void *)key->address, key->length);
     }
 
+    ucs_warn("%s: calling hsa_amd_ipc_memory_attach addr:%p len:%lu",
+             cache->name, (void *)key->address, key->length);
     hsa_status = hsa_amd_ipc_memory_attach(&key->ipc, key->length, 0, NULL, mapped_addr);
     if (ucs_unlikely(hsa_status != HSA_STATUS_SUCCESS)) {
-        ucs_fatal("%s: failed to open ipc mem handle. addr:%p len:%lu",
-                  cache->name, (void *)key->address, key->length);
+        ucs_fatal("%s: failed to open ipc mem handle. addr:%p len:%lu hsa_status:0x%x",
+                  cache->name, (void *)key->address, key->length, hsa_status);
     }
 
     /*create new cache entry */

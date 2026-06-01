@@ -153,7 +153,8 @@ uct_rocm_copy_iface_flush(uct_iface_h tl_iface, unsigned flags,
     }
 
     if (ucs_queue_is_empty(&iface->signal_queue) &&
-        ucs_queue_is_empty(&iface->pending_queue)) {
+        ucs_queue_is_empty(&iface->pending_queue) &&
+        ucs_queue_is_empty(&iface->deferred_flush_queue)) {
         UCT_TL_IFACE_STAT_FLUSH(ucs_derived_of(tl_iface, uct_base_iface_t));
         return UCS_OK;
     }
@@ -168,7 +169,9 @@ uct_rocm_copy_ep_flush(uct_ep_h tl_ep, unsigned flags, uct_completion_t *comp)
     uct_rocm_copy_iface_t *iface = ucs_derived_of(tl_ep->iface,
                                                   uct_rocm_copy_iface_t);
     return uct_rocm_base_ep_flush(tl_ep, &iface->flush_signal_pool,
-                                  &iface->signal_queue, comp);
+                                  &iface->signal_queue,
+                                  &iface->pending_queue,
+                                  &iface->deferred_flush_queue, comp);
 }
 
 static ucs_status_t
@@ -204,9 +207,17 @@ static unsigned uct_rocm_copy_iface_progress(uct_iface_h tl_iface)
     uct_rocm_pending_req_priv_t *priv;
     unsigned count;
 
+    ucs_queue_elem_t *elem;
+
     count = uct_rocm_base_progress(&iface->signal_queue);
     if (count > 0) {
         uct_pending_queue_dispatch(priv, &iface->pending_queue, 1);
+    }
+    if (ucs_queue_is_empty(&iface->pending_queue)) {
+        while (!ucs_queue_is_empty(&iface->deferred_flush_queue)) {
+            elem = ucs_queue_pull(&iface->deferred_flush_queue);
+            ucs_queue_push(&iface->signal_queue, elem);
+        }
     }
     return count;
 }
@@ -402,6 +413,7 @@ static UCS_CLASS_INIT_FUNC(uct_rocm_copy_iface_t, uct_md_h md, uct_worker_h work
     }
 
     ucs_queue_head_init(&self->pending_queue);
+    ucs_queue_head_init(&self->deferred_flush_queue);
 
     ucs_snprintf_safe(target_name, sizeof(target_name), "dest:%ld", self->id);
     status = uct_rocm_copy_create_cache(&self->local_memh_cache, target_name);
