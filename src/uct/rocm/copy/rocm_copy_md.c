@@ -18,7 +18,6 @@
 #include <ucs/sys/ptr_arith.h>
 #include <ucs/arch/cpu.h>
 #include <ucs/debug/memtrack_int.h>
-#include <ucs/memory/memtype_cache.h>
 #include <ucm/api/ucm.h>
 #include <ucs/type/class.h>
 #include <uct/api/v2/uct_v2.h>
@@ -415,18 +414,6 @@ uct_rocm_copy_md_open(uct_component_h component, const char *md_name,
     uct_rocm_copy_md_t *md;
     ucs_rcache_params_t rcache_params;
     int have_dmabuf;
-
-#ifdef HAVE_ROCM_VMM_TYPE
-    /* Install UCM VMM hooks (hsa_amd_vmem_map/unmap) before the application
-     * can allocate VMM GPU memory. The memtype cache is created lazily on
-     * first use — too late if hipMemMap is called before the first MPI send.
-     * Triggering a cache lookup here creates the cache and installs UCM hooks
-     * at ucp_init time, so VMM allocations are tracked from the start. */
-    if (ucs_memtype_cache_global_instance == NULL) {
-        ucs_memory_info_t dummy;
-        ucs_memtype_cache_lookup((void*)1, 1, &dummy);
-    }
-#endif
 
     md = ucs_malloc(sizeof(uct_rocm_copy_md_t), "uct_rocm_copy_md_t");
     if (NULL == md) {
