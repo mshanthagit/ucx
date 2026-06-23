@@ -21,10 +21,17 @@ typedef struct uct_rocm_ipc_md_config {
 } uct_rocm_ipc_md_config_t;
 
 typedef struct uct_rocm_ipc_key {
-    hsa_amd_ipc_memory_t ipc;
+    union {
+        hsa_amd_ipc_memory_t ipc; /* pool-allocated memory IPC handle */
+        struct {
+            int   fd;             /* VMM memory: shareable dmabuf fd (sender) */
+            pid_t pid;            /* sender PID for pidfd_open/pidfd_getfd */
+        } vmm;
+    };
     uintptr_t address;
-    size_t length;
-    int dev_num;
+    size_t    length;
+    int       dev_num;
+    uint8_t   is_vmm;             /* 1 = VMM memory, 0 = pool-allocated */
 } uct_rocm_ipc_key_t;
 
 #endif
