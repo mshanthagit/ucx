@@ -29,17 +29,17 @@
 
 #ifdef HAVE_ROCM_VMM_TYPE
 /* VMM device memory (HSA_EXT_POINTER_TYPE_HSA_VMEM) is GPU-only and cannot
- * be accessed via CPU memcpy. Returns 1 if addr must use async HSA copy. */
+ * be accessed via CPU memcpy. Returns 1 if addr must use async HSA copy.
+ * Calls hsa_amd_pointer_info directly to avoid logging errors for non-ROCM
+ * addresses (e.g. plain host buffers), which is a normal and expected case. */
 static UCS_F_ALWAYS_INLINE int
 uct_rocm_is_vmm_addr(const void *addr, size_t length)
 {
-    hsa_amd_pointer_type_t mem_type;
-    hsa_status_t status;
+    hsa_amd_pointer_info_t info = {.size = sizeof(info)};
 
-    status = uct_rocm_base_get_ptr_info((void*)addr, length, NULL, NULL,
-                                        &mem_type, NULL, NULL);
-    return (status == HSA_STATUS_SUCCESS) &&
-           (mem_type == HSA_EXT_POINTER_TYPE_HSA_VMEM);
+    return (hsa_amd_pointer_info((void*)addr, &info, NULL, NULL, NULL) ==
+            HSA_STATUS_SUCCESS) &&
+           (info.type == HSA_EXT_POINTER_TYPE_HSA_VMEM);
 }
 #else
 static UCS_F_ALWAYS_INLINE int
