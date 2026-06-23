@@ -401,8 +401,11 @@ ucs_status_t uct_rocm_base_mem_query(uct_md_h md, const void *addr,
         return status;
     }
 
-    if ((hsa_mem_type == HSA_EXT_POINTER_TYPE_HSA) &&
-        (dev_type == HSA_DEVICE_TYPE_GPU)) {
+    if (((hsa_mem_type == HSA_EXT_POINTER_TYPE_HSA)
+#ifdef HAVE_ROCM_VMM_TYPE
+         || (hsa_mem_type == HSA_EXT_POINTER_TYPE_HSA_VMEM)
+#endif
+        ) && (dev_type == HSA_DEVICE_TYPE_GPU)) {
         mem_type = UCS_MEMORY_TYPE_ROCM;
         uct_rocm_base_last_device_agent_used = uct_rocm_base_get_dev_num(agent);
         ucs_status = uct_rocm_base_get_sys_dev(agent, &sys_dev);
