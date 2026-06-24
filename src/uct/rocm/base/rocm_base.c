@@ -263,11 +263,6 @@ hsa_status_t uct_rocm_base_get_ptr_info(void *ptr, size_t size, void **base_ptr,
 #endif
         ) {
             *dev_type = HSA_DEVICE_TYPE_CPU;
-#ifdef HAVE_ROCM_VMM_TYPE
-        } else if (info.type == HSA_EXT_POINTER_TYPE_HSA_VMEM) {
-            /* agentOwner is not meaningful for VMM-mapped memory */
-            *dev_type = HSA_DEVICE_TYPE_GPU;
-#endif
         } else {
             status = hsa_agent_get_info(info.agentOwner, HSA_AGENT_INFO_DEVICE,
                                         dev_type);
