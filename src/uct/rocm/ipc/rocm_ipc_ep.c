@@ -126,15 +126,7 @@ ucs_status_t uct_rocm_ipc_ep_zcopy(uct_ep_h tl_ep,
         return UCS_ERR_INVALID_ADDR;
     }
 
-    if (remote_agent.handle == 0
-#ifdef HAVE_ROCM_VMM_TYPE
-        /* For an imported VMM region, agentOwner from hsa_amd_pointer_info is the
-         * sender's GPU agent handle which is not valid in this process context.
-         * Use the local agent for the async copy — VMM access was already granted
-         * to all local GPU agents during import via hsa_amd_vmem_set_access. */
-        || (mem_type == HSA_EXT_POINTER_TYPE_HSA_VMEM)
-#endif
-       ) {
+    if (remote_agent.handle == 0) {
         remote_agent = local_agent;
     } else {
         num_gpu = uct_rocm_base_get_gpu_agents(&gpu_agents);
